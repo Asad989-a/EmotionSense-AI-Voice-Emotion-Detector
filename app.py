@@ -1,85 +1,82 @@
 import streamlit as st
 import torch
-from transformers import pipeline
+from transformers import AutoTokenizer, AutoModelForCausalLM
 import emoji
-import soundfile as sf
 
 # ------------------------------------------------------------
 # Load model and tokenizer
 # ------------------------------------------------------------
-print("Loading microsoft/DialoGPT-medium locally on CPU ...")
-tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-medium")
-model = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-medium")
+@st.cache_resource
+def load_model():
+    st.write("⏳ Loading DialoGPT-medium model... please wait.")
+    tokenizer = AutoTokenizer.from_pretrained("microsoft/DialoGPT-medium")
+    model = AutoModelForCausalLM.from_pretrained("microsoft/DialoGPT-medium")
+    return tokenizer, model
+
+tokenizer, model = load_model()
 
 # ------------------------------------------------------------
-# Chatbot conversation logic
+# Function to generate chatbot reply
 # ------------------------------------------------------------
-def chat_response(message, history):
-    if history is None:
-        history = []
+def generate_reply(user_input, chat_history_ids=None):
+    new_input_ids = tokenizer.encode(user_input + tokenizer.eos_token, return_tensors='pt')
 
-    # Convert message history from message objects → plain text
-    formatted_history = []
-    for msg in history:
-        if isinstance(msg, dict):
-            if msg["role"] == "user":
-                formatted_history.append((msg["content"], ""))
-            elif msg["role"] == "assistant" and formatted_history:
-                formatted_history[-1] = (formatted_history[-1][0], msg["content"])
+    bot_input_ids = (
+        torch.cat([chat_history_ids, new_input_ids], dim=-1)
+        if chat_history_ids is not None
+        else new_input_ids
+    )
 
-    # Encode input
-    new_input_ids = tokenizer.encode(message + tokenizer.eos_token, return_tensors='pt')
-
-    # Build chat context
-    bot_input_ids = torch.cat([
-        tokenizer.encode(m + tokenizer.eos_token, return_tensors='pt')
-        for m, _ in formatted_history
-    ] + [new_input_ids], dim=-1) if formatted_history else new_input_ids
-
-    # Generate response
     chat_history_ids = model.generate(
         bot_input_ids,
         max_length=1000,
         pad_token_id=tokenizer.eos_token_id,
         temperature=0.7,
-        top_p=0.95,
+        top_p=0.9,
         do_sample=True
     )
 
     reply = tokenizer.decode(chat_history_ids[:, bot_input_ids.shape[-1]:][0], skip_special_tokens=True)
-
-    # Append messages in new dictionary format
-    new_history = history + [
-        {"role": "user", "content": message},
-        {"role": "assistant", "content": reply}
-    ]
-
-    return new_history, new_history
+    return reply, chat_history_ids
 
 # ------------------------------------------------------------
-# Gradio UI
+# Streamlit App UI
 # ------------------------------------------------------------
-with gr.Blocks(title="AI Voice Chatbot") as demo:
-    gr.Markdown("## 🤖 AI Chatbot (Voice + Text)")
-    gr.Markdown("Chat with DialoGPT — type or record your message below.")
+st.set_page_config(page_title="🤖 AI Voice Chatbot", page_icon="🎤", layout="centered")
 
-    chatbox = gr.Chatbot(label="Conversation", type="messages")
+st.title("🎙 AI Voice + Text Chatbot")
+st.markdown("Chat with **Microsoft DialoGPT** – Type your message below.")
 
-    with gr.Row():
-        text_input = gr.Textbox(label="💬 Type your message here...")
-        send_btn = gr.Button("Send")
+if "chat_history_ids" not in st.session_state:
+    st.session_state.chat_history_ids = None
+if "past_messages" not in st.session_state:
+    st.session_state.past_messages = []
 
-    gr.Markdown("### 🎤 Voice Input")
-    user_audio = gr.Audio(sources=["microphone"], type="filepath", label="🎙 Record message")
+user_input = st.text_input("💬 Type your message here:")
 
-    clear_btn = gr.Button("🧹 Clear Conversation")
-
-    send_btn.click(chat_response, inputs=[text_input, chatbox], outputs=[chatbox, chatbox])
-    text_input.submit(chat_response, inputs=[text_input, chatbox], outputs=[chatbox, chatbox])
-    clear_btn.click(lambda: [], None, chatbox, queue=False)
+if st.button("Send"):
+    if user_input.strip():
+        reply, chat_ids = generate_reply(user_input, st.session_state.chat_history_ids)
+        st.session_state.chat_history_ids = chat_ids
+        st.session_state.past_messages.append(("You", user_input))
+        st.session_state.past_messages.append(("Bot", reply))
+    else:
+        st.warning("Please type something before sending.")
 
 # ------------------------------------------------------------
-# Launch app
+# Chat Display
 # ------------------------------------------------------------
-if __name__ == "__main__":
-    demo.launch(server_name="0.0.0.0", server_port=int(os.environ.get("PORT", 7860)))
+st.markdown("### 💬 Conversation")
+for sender, msg in st.session_state.past_messages:
+    if sender == "You":
+        st.markdown(f"🧑 **You:** {msg}")
+    else:
+        st.markdown(f"🤖 **Bot:** {msg}")
+
+# ------------------------------------------------------------
+# Reset Chat
+# ------------------------------------------------------------
+if st.button("🧹 Clear Conversation"):
+    st.session_state.past_messages = []
+    st.session_state.chat_history_ids = None
+    st.success("Conversation cleared!")
