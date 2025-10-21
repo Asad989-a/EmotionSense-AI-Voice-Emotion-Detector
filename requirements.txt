@@ -1,6 +1,1 @@
-torch
-transformers
-gradio>=4.31.0
 streamlit
-emoji
-soundfile
