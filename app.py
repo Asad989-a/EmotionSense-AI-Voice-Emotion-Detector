@@ -1,8 +1,8 @@
+import streamlit as st
 import torch
-from transformers import AutoModelForCausalLM, AutoTokenizer
-import gradio as gr
-import Streamlit 
-import os
+from transformers import pipeline
+import emoji
+import soundfile as sf
 
 # ------------------------------------------------------------
 # Load model and tokenizer
